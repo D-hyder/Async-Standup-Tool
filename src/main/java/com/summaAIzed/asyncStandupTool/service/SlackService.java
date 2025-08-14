@@ -4,28 +4,41 @@ import com.summaAIzed.asyncStandupTool.model.Member;
 import com.summaAIzed.asyncStandupTool.model.StandupEntry;
 import com.summaAIzed.asyncStandupTool.repository.MemberRepository;
 import com.summaAIzed.asyncStandupTool.repository.StandupEntryRepository;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
 @Service
+@Slf4j
 public class SlackService {
 
-    private final WebClient webClient;
+    private static WebClient webClient;
     @Autowired
     private MemberRepository memberRepository;
     @Autowired
     private StandupEntryRepository standupEntryRepository;
-    @Value("${slack.bot.token}")
-    private String botToken;
+    private final String botToken;
 
-    public SlackService(WebClient.Builder webClientBuilder) {
-        this.webClient = webClientBuilder.build();
+    public SlackService(
+            @Value("${slack.bot.token}") String botToken,
+            WebClient.Builder builder
+    ) {
+        this.botToken = botToken;
+        this.webClient = builder
+                .baseUrl("https://slack.com/api")
+                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + botToken)
+                .defaultHeader(HttpHeaders.CONTENT_TYPE, "application/json; charset=utf-8")
+                .build();
     }
 
     // Build modal JSON
@@ -93,5 +106,29 @@ public class SlackService {
         entry.setBlockers(blockers);
 
         standupEntryRepository.save(entry);
+    }
+
+    /** Call Slack chat.postMessage */
+    // SlackService.java
+    public static String postMessage(String channelOrUserId, String text) {
+        String resp = webClient.post()
+                .uri("/chat.postMessage")
+                .bodyValue(Map.of("channel", channelOrUserId, "text", text, "mrkdwn", true))
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, r ->
+                        r.bodyToMono(String.class).map(body ->
+                                new RuntimeException("Slack HTTP " + r.statusCode() + ": " + body)))
+                .bodyToMono(String.class)
+                .timeout(Duration.ofSeconds(10))
+                .block();
+
+        if (resp == null || !resp.contains("\"ok\":true")) {
+            throw new RuntimeException("Slack API returned non-ok: " + resp);
+        }
+        return resp;
+    }
+
+    public void deleteAllEntries(){
+        standupEntryRepository.deleteAll();
     }
 }

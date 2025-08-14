@@ -9,11 +9,9 @@ public class StandupEntry {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-
     @ManyToOne
     @JoinColumn(name = "member_id")
     private Member member;
-
     private LocalDate date;
     private String yesterday;
     private String today;

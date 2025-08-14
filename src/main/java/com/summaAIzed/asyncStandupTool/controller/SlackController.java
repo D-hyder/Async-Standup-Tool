@@ -2,11 +2,8 @@ package com.summaAIzed.asyncStandupTool.controller;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.summaAIzed.asyncStandupTool.model.Member;
-import com.summaAIzed.asyncStandupTool.model.StandupEntry;
-import com.summaAIzed.asyncStandupTool.repository.MemberRepository;
-import com.summaAIzed.asyncStandupTool.repository.StandupEntryRepository;
 import com.summaAIzed.asyncStandupTool.service.SlackService;
+import com.summaAIzed.asyncStandupTool.service.StandupService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
@@ -14,7 +11,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -25,44 +21,69 @@ public class SlackController {
     private String botToken;
     @Autowired
     private SlackService slackService;
+    private final StandupService standupService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    public SlackController(StandupService standupService) {
+        this.standupService = standupService;
+    }
+
     // Handle slash commands (/standup)
     @PostMapping("/events")
-    public ResponseEntity<String> handleCommand(@RequestParam Map<String, String> params) {
+    public ResponseEntity<Void> handleCommand(@RequestParam Map<String, String> params) {
         String command = params.get("command");
         String triggerId = params.get("trigger_id");
 
         if ("/standup".equals(command)) {
             slackService.openModal(triggerId);  // <-- Calls service to open modal
-            return ResponseEntity.ok("success");        // Acknowledge command
+            return ResponseEntity.ok().build();        // Acknowledge command
         }
-        return ResponseEntity.ok("success");
+        return ResponseEntity.ok().build();
     }
 
     // Handle modal submission and button clicks
     @PostMapping("/interactions")
-    public ResponseEntity<String> handleInteraction(@RequestParam("payload") String payloadJson) throws IOException {
+    public ResponseEntity<Void> handleInteraction(@RequestParam("payload") String payloadJson) throws IOException {
         JsonNode payload = objectMapper.readTree(payloadJson);
-        String type = payload.get("type").asText();
+        String type = payload.path("type").asText();
 
         if ("view_submission".equals(type)) {
-            // Extract responses from modal
-            JsonNode values = payload.get("view").get("state").get("values");
+            JsonNode values = payload.path("view").path("state").path("values");
 
-            String yesterday = values.get("yesterday").get("input").get("value").asText();
-            String today = values.get("today").get("input").get("value").asText();
-            String blockers = values.get("blockers").get("input").get("value").asText();
+            // these keys must match your modal block_id + action_id
+            String yesterday = values.path("yesterday").path("input").path("value").asText("");
+            String today     = values.path("today").path("input").path("value").asText("");
+            String blockers  = values.path("blockers").path("input").path("value").asText("");
 
-            String slackUserId = payload.get("user").get("id").asText();
+            String slackUserId = payload.path("user").path("id").asText("");
+            // display name may be absent in some payloads, so fallback to id
+            String displayName = payload.path("user").path("name").asText(slackUserId);
 
-            // TODO: Save to DB (Member + StandupEntry)
+            // 🔗 save + notify (DM / channel post handled inside the service)
+            standupService.saveStandup(slackUserId, displayName, yesterday, today, blockers);
 
-            return (ResponseEntity<String>) ResponseEntity.ok(); // Acknowledge
+            // must return within ~3s
+            return ResponseEntity.ok().build();
         }
 
-        return ResponseEntity.ok("success");
+        // acknowledge all other interaction types
+        return ResponseEntity.ok().build();
     }
+
+    @PostMapping("/digest/now")
+    public ResponseEntity<String> digestNow() {
+        try {
+            standupService.postDailyDigest(LocalDate.now());
+            return ResponseEntity.ok("Digest posted.");
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("Digest failed: " + e.getMessage());
+        }
+    }
+
+    @DeleteMapping()
+    public void deleteEntries() {
+        slackService.deleteAllEntries();
+        }
 
 }
